@@ -45,13 +45,13 @@ fn craft_i18n() -> String {
     println!("cargo::rerun-if-env-changed=CRAFT_I18N_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_I18N_REQUIRED");
     let required = std::env::var("CRAFT_I18N_REQUIRED").is_ok_and(|v| v.trim() == "1");
-    let entries = match std::env::var_os("CRAFT_I18N_DIR").filter(|d| !d.is_empty()) {
+    let mut entries = match std::env::var_os("CRAFT_I18N_DIR").filter(|d| !d.is_empty()) {
         // Not canonicalized: on Windows that gives `\\?\C:\…`, which `include_str!` can't read.
         Some(dir) => match locales(&std::path::PathBuf::from(dir).join("locales")) {
             Ok(entries) => entries,
             Err(e) => {
                 let level = if required { "error" } else { "warning" };
-                println!("cargo::{level}=CRAFT_I18N_DIR: {e}; the interface is English only");
+                println!("cargo::{level}=CRAFT_I18N_DIR: {e}; upstream catalogs are unavailable");
                 Vec::new()
             }
         },
@@ -62,6 +62,20 @@ fn craft_i18n() -> String {
             Vec::new()
         }
     };
+    // Sorriso Server owns and ships its pt-BR translations in this repository.
+    // Local catalogs override the pinned upstream pt-BR catalog, even without
+    // CRAFT_I18N_DIR; other upstream languages remain available unchanged.
+    let local_catalogs = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
+    match locales(&local_catalogs) {
+        Ok(local) => {
+            for (code, shared, app) in local {
+                entries.retain(|(existing, _, _)| existing != &code);
+                entries.push((code, shared, app));
+            }
+        }
+        Err(e) => println!("cargo::error=Sorriso Server interface catalogs: {e}"),
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
     let mut o = String::from("/// (locale, shared catalog, WordCraft's catalog), one entry per locale; `\"\"` for a missing file.\n");
     o.push_str("pub static CRAFT_I18N: &craft_i18n::Embedded = &[\n");
     for (code, shared, app) in entries {
